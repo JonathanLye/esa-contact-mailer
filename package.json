@@ -1,0 +1,40 @@
+{
+  "name": "esa-contact-mailer",
+  "version": "1.0.0",
+  "description": "Contact-form mailer with optional Alibaba Cloud ESA AI Captcha. Express + nodemailer.",
+  "license": "MIT",
+  "author": "Speakingplease",
+  "type": "commonjs",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "check": "node --check index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Speakingplease/esa-contact-mailer.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Speakingplease/esa-contact-mailer/issues"
+  },
+  "homepage": "https://github.com/Speakingplease/esa-contact-mailer#readme",
+  "keywords": [
+    "contact-form",
+    "nodemailer",
+    "smtp",
+    "express",
+    "aliyun-esa-captcha",
+    "mailer"
+  ],
+  "dependencies": {
+    "@alicloud/captcha20230305": "^1.1.4",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "nodemailer": "^6.10.0"
+  }
+}
