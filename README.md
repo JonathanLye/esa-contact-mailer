@@ -123,6 +123,7 @@ CAPTCHA_SCENE_ID=
    ...
    // ===== END Aliyun ESA AI Captcha =====
    ```
+   (`captchaRows` defaults to `''`, so owner HTML remains valid after deletion.)
 2. Uninstall the SDKs:
    ```bash
    npm uninstall @alicloud/captcha20230305 @alicloud/openapi-core

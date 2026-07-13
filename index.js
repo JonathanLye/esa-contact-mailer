@@ -8,9 +8,9 @@ require('dotenv').config({ path: require('path').join(__dirname, '.env') })
 // Only needed if you front this service with Alibaba Cloud ESA AI Captcha.
 // Soft-disable: leave CAPTCHA_SCENE_ID / ALIYUN_ACCESS_KEY_ID blank in .env
 //   -> captchaConfigured=false, all of this becomes a no-op automatically.
-// Hard-remove: delete every block marked BEGIN/END Aliyun ESA AI Captcha,
-//   remove captcha fields from mail templates / request meta below,
-//   and run: npm uninstall @alicloud/captcha20230305 @alicloud/openapi-core
+// Hard-remove: delete every block marked BEGIN/END Aliyun ESA AI Captcha
+//   (captchaRows defaults to '' so owner HTML stays valid), then run:
+//   npm uninstall @alicloud/captcha20230305 @alicloud/openapi-core
 const Captcha20230305 = require('@alicloud/captcha20230305')
 const OpenApi = require('@alicloud/openapi-core')
 const CaptchaClient = Captcha20230305.default
@@ -25,7 +25,6 @@ const SMTP_PORT = Number(process.env.SMTP_PORT) || 465
 const SMTP_SECURE = String(process.env.SMTP_SECURE || 'true').toLowerCase() !== 'false'
 const CONTACT_TO = process.env.CONTACT_TO || SMTP_USER
 const CONTACT_PROXY_TOKEN = (process.env.CONTACT_PROXY_TOKEN || '').trim()
-const FROM_DISPLAY_NAME = (process.env.FROM_DISPLAY_NAME || 'Website Contact').trim()
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGIN || 'http://localhost:5173')
   .split(',')
   .map((origin) => origin.trim())
@@ -35,6 +34,15 @@ function envValue(name) {
   return String(process.env[name] || '')
     .trim()
     .replace(/^['"]|['"]$/g, '')
+}
+
+/** Strip CR/LF/controls so env values cannot inject SMTP headers. */
+function sanitizeHeaderValue(value, fallback = '') {
+  const cleaned = String(value || '')
+    .replace(/[\r\n\x00-\x1f\x7f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return cleaned || fallback
 }
 
 function deriveSiteName() {
@@ -51,7 +59,11 @@ function deriveSiteName() {
   return firstOrigin || 'your-site'
 }
 
-const SITE_NAME = deriveSiteName()
+const FROM_DISPLAY_NAME = sanitizeHeaderValue(
+  process.env.FROM_DISPLAY_NAME || 'Website Contact',
+  'Website Contact',
+)
+const SITE_NAME = sanitizeHeaderValue(deriveSiteName(), 'your-site')
 
 // ===== BEGIN Aliyun ESA AI Captcha (optional) =====
 const CAPTCHA_SCENE_ID = envValue('CAPTCHA_SCENE_ID')
@@ -342,8 +354,10 @@ function metaRow(label, value) {
 
 function buildOwnerNotifyHtml(safeEmail, safeMessage, meta) {
   const year = new Date().getFullYear()
+  // Default empty so hard-removing the ESA block below stays safe.
+  let captchaRows = ''
   // ===== BEGIN Aliyun ESA AI Captcha (optional) =====
-  const captchaRows = [
+  captchaRows = [
     metaRow('Captcha', meta.captcha),
     metaRow('Captcha source', meta.captchaSource),
     metaRow('Captcha length', meta.captchaParamLen),
@@ -488,18 +502,21 @@ app.post('/api/contact', contactLimiter, async (req, res) => {
     const safeMessage = escapeHtml(message).replace(/\n/g, '<br>')
     const meta = collectRequestMeta(req)
 
+    const fromAddress = { name: FROM_DISPLAY_NAME, address: SMTP_USER }
+    const safeSubjectEmail = sanitizeHeaderValue(email, 'unknown')
+
     await transporter.sendMail({
-      from: `"${FROM_DISPLAY_NAME}" <${SMTP_USER}>`,
+      from: fromAddress,
       to: CONTACT_TO,
       replyTo: email,
-      subject: `New message from ${email}`,
+      subject: `New message from ${safeSubjectEmail}`,
       text: buildOwnerNotifyText(email, message, meta),
       html: buildOwnerNotifyHtml(safeEmail, safeMessage, meta),
     })
 
     try {
       await transporter.sendMail({
-        from: `"${FROM_DISPLAY_NAME}" <${SMTP_USER}>`,
+        from: fromAddress,
         to: email,
         subject: `Thanks for reaching out — ${FROM_DISPLAY_NAME}`,
         text: buildAutoReplyText(message),
