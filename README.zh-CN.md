@@ -6,10 +6,10 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Speakingplease/esa-contact-mailer/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT" /></a>
+  <a href="https://github.com/JonathanLye/esa-contact-mailer/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT" /></a>
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg" alt="Node >= 18" /></a>
-  <a href="https://github.com/Speakingplease/esa-contact-mailer/actions/workflows/ci.yml"><img src="https://github.com/Speakingplease/esa-contact-mailer/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <a href="https://github.com/Speakingplease/esa-contact-mailer/issues"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs welcome" /></a>
+  <a href="https://github.com/JonathanLye/esa-contact-mailer/actions/workflows/ci.yml"><img src="https://github.com/JonathanLye/esa-contact-mailer/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://github.com/JonathanLye/esa-contact-mailer/issues"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs welcome" /></a>
 </p>
 
 <p align="center">
@@ -54,7 +54,7 @@
 ## 快速开始
 
 ```bash
-git clone https://github.com/Speakingplease/esa-contact-mailer.git
+git clone https://github.com/JonathanLye/esa-contact-mailer.git
 cd esa-contact-mailer
 npm install
 cp .env.example .env
@@ -205,4 +205,4 @@ CAPTCHA_SCENE_ID=
 
 ## 许可证
 
-[MIT](LICENSE) © Speakingplease
+[MIT](LICENSE) © JonathanLye

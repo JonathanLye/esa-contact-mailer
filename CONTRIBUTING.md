@@ -4,7 +4,7 @@ Thanks for taking an interest in `esa-contact-mailer`.
 
 ## Ways to help
 
-- Report bugs or unclear docs via [Issues](https://github.com/Speakingplease/esa-contact-mailer/issues)
+- Report bugs or unclear docs via [Issues](https://github.com/JonathanLye/esa-contact-mailer/issues)
 - Open a pull request for small, focused fixes
 - Improve the README if a setup step tripped you up
 
