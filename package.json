@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Contact-form mailer with optional Alibaba Cloud ESA AI Captcha. Express + nodemailer.",
   "license": "MIT",
-  "author": "Speakingplease",
+  "author": "JonathanLye",
   "type": "commonjs",
   "main": "index.js",
   "scripts": {
@@ -15,12 +15,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Speakingplease/esa-contact-mailer.git"
+    "url": "git+https://github.com/JonathanLye/esa-contact-mailer.git"
   },
   "bugs": {
-    "url": "https://github.com/Speakingplease/esa-contact-mailer/issues"
+    "url": "https://github.com/JonathanLye/esa-contact-mailer/issues"
   },
-  "homepage": "https://github.com/Speakingplease/esa-contact-mailer#readme",
+  "homepage": "https://github.com/JonathanLye/esa-contact-mailer#readme",
   "keywords": [
     "contact-form",
     "nodemailer",
