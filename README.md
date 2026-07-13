@@ -12,6 +12,10 @@
   <a href="https://github.com/Speakingplease/esa-contact-mailer/issues"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs welcome" /></a>
 </p>
 
+<p align="center">
+  <strong>Languages:</strong> <a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a>
+</p>
+
 ---
 
 ## Introduction
@@ -24,6 +28,16 @@
 4. Ships with rate limiting, CORS allowlist, and a honeypot field
 
 It is **tuned for Alibaba Cloud ESA AI Captcha** when you put ESA in front of `/api/contact`, but that layer is **optional**. Leave the captcha env vars blank and the service runs as a plain SMTP mailer.
+
+---
+
+## Preview
+
+Default HTML templates (display name / site name come from `FROM_DISPLAY_NAME` and `SITE_NAME`):
+
+| Owner notify | Visitor auto-reply |
+| --- | --- |
+| ![Owner notify](docs/preview/owner-notify.png) | ![Auto-reply](docs/preview/auto-reply.png) |
 
 ---
 
