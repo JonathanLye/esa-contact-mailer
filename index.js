@@ -392,16 +392,39 @@ app.use((req, res, next) => {
   next()
 })
 
+/**
+ * Client IP for rate limiting. Reverse proxies (nginx) replace X-Forwarded-For
+ * with their own peer, so with Aliyun ESA in front every visitor would share
+ * one bucket. ESA's managed transform injects `ali-real-client-ip` (more
+ * trustworthy than XFF); fall back to req.ip when that header is absent.
+ */
+function clientIp(req) {
+  const esaIp = (req.get('ali-real-client-ip') || '').trim()
+  if (esaIp && esaIp.length <= 64) return esaIp
+  return req.ip || req.socket?.remoteAddress || 'unknown'
+}
+
 const contactLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 5,
+  max: 10,
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: clientIp,
   message: { ok: false, error: 'Too many messages. Please try again later.' },
 })
 
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true })
+})
+
+// Calibration aid: shows which IP the rate limiter sees (ESA header vs req.ip).
+app.get('/api/ip', (req, res) => {
+  res.json({
+    ok: true,
+    clientIp: clientIp(req),
+    reqIp: req.ip,
+    esaIp: (req.get('ali-real-client-ip') || '').trim() || null,
+  })
 })
 
 // POST /api/contact — production typically sits behind a reverse proxy.
