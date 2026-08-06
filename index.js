@@ -1,6 +1,8 @@
 const express = require('express')
 const cors = require('cors')
+const crypto = require('crypto')
 const rateLimit = require('express-rate-limit')
+const helmet = require('helmet')
 const nodemailer = require('nodemailer')
 require('dotenv').config({ path: require('path').join(__dirname, '.env') })
 
@@ -91,6 +93,18 @@ const transporter = nodemailer.createTransport({
     user: SMTP_USER,
     pass: SMTP_PASS,
   },
+  // Fail fast instead of holding a request for the 10-minute socket timeout.
+  connectionTimeout: 15000,
+  greetingTimeout: 15000,
+  socketTimeout: 30000,
+})
+
+// Surface SMTP misconfiguration at boot, not on the first visitor.
+transporter.verify().catch((error) => {
+  console.error(
+    'SMTP verification failed — mail will not send:',
+    error instanceof Error ? error.message : error,
+  )
 })
 
 function escapeHtml(value) {
@@ -348,6 +362,8 @@ function buildOwnerNotifyHtml(safeEmail, safeMessage, meta) {
 
 const app = express()
 
+app.disable('x-powered-by')
+app.use(helmet())
 app.set('trust proxy', 1)
 app.use(express.json({ limit: '256kb' }))
 app.use(
@@ -361,6 +377,20 @@ app.use(
     },
   }),
 )
+
+// Minimal request log with a request id for correlating errors in PM2 logs.
+app.use((req, res, next) => {
+  const requestId = crypto.randomBytes(4).toString('hex')
+  res.setHeader('X-Request-Id', requestId)
+  const start = process.hrtime.bigint()
+  res.on('finish', () => {
+    const ms = Number(process.hrtime.bigint() - start) / 1e6
+    console.log(
+      `${new Date().toISOString()} ${req.method} ${req.originalUrl} ${res.statusCode} ${ms.toFixed(1)}ms id=${requestId} ip=${req.ip || '-'}`,
+    )
+  })
+  next()
+})
 
 const contactLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -464,9 +494,38 @@ app.use((err, _req, res, next) => {
     res.status(403).json({ ok: false, error: 'Forbidden.' })
     return
   }
-  next(err)
+  // Everything else answers JSON too — never the Express HTML error page.
+  const status = err?.type === 'entity.parse.failed' ? 400 : 500
+  console.error(`Unhandled error (${status}):`, err instanceof Error ? err.stack : err)
+  res.status(status).json({
+    ok: false,
+    error:
+      status === 400
+        ? 'Invalid JSON body.'
+        : 'Something went wrong. Please try again later.',
+  })
 })
 
-app.listen(PORT, '127.0.0.1', () => {
+const server = app.listen(PORT, '127.0.0.1', () => {
   console.log(`Contact server listening on http://127.0.0.1:${PORT}`)
 })
+
+// Graceful shutdown: drain in-flight requests, close the SMTP pool, then exit.
+let shuttingDown = false
+function shutdown(signal) {
+  if (shuttingDown) return
+  shuttingDown = true
+  console.log(`${signal} received — draining connections…`)
+  const force = setTimeout(() => {
+    console.error('Shutdown timed out; forcing exit.')
+    process.exit(1)
+  }, 5000)
+  force.unref()
+  server.close(() => {
+    transporter.close()
+    process.exit(0)
+  })
+  server.closeIdleConnections?.()
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'))
+process.on('SIGINT', () => shutdown('SIGINT'))
