@@ -6,15 +6,9 @@ require('dotenv').config({ path: require('path').join(__dirname, '.env') })
 
 // ===== BEGIN Aliyun ESA AI Captcha (optional) =====
 // Only needed if you front this service with Alibaba Cloud ESA AI Captcha.
-// Soft-disable: leave CAPTCHA_SCENE_ID / ALIYUN_ACCESS_KEY_ID blank in .env
-//   -> captchaConfigured=false, all of this becomes a no-op automatically.
-// Hard-remove: delete every block marked BEGIN/END Aliyun ESA AI Captcha
-//   (captchaRows defaults to '' so owner HTML stays valid), then run:
-//   npm uninstall @alicloud/captcha20230305 @alicloud/openapi-core
-const Captcha20230305 = require('@alicloud/captcha20230305')
-const OpenApi = require('@alicloud/openapi-core')
-const CaptchaClient = Captcha20230305.default
-const { Config } = OpenApi.$OpenApiUtil
+// ESA verifies and consumes the V3 token at the edge — no server-side SDK is
+// required (https://help.aliyun.com/zh/edge-security-acceleration/esa/user-guide/ai-captchas-overview/).
+// Soft-disable: leave CAPTCHA_SCENE_ID blank in .env -> captchaConfigured=false.
 // ===== END Aliyun ESA AI Captcha =====
 
 const PORT = Number(process.env.PORT) || 8787
@@ -67,31 +61,8 @@ const SITE_NAME = sanitizeHeaderValue(deriveSiteName(), 'your-site')
 
 // ===== BEGIN Aliyun ESA AI Captcha (optional) =====
 const CAPTCHA_SCENE_ID = envValue('CAPTCHA_SCENE_ID')
-const CAPTCHA_REGION = (envValue('CAPTCHA_REGION') || 'cn').toLowerCase()
-const ALIYUN_ACCESS_KEY_ID = envValue('ALIYUN_ACCESS_KEY_ID')
-const ALIYUN_ACCESS_KEY_SECRET = envValue('ALIYUN_ACCESS_KEY_SECRET')
 
-const captchaConfigured = Boolean(
-  CAPTCHA_SCENE_ID && ALIYUN_ACCESS_KEY_ID && ALIYUN_ACCESS_KEY_SECRET,
-)
-
-let captchaClient = null
-let captchaEndpoint = ''
-if (captchaConfigured) {
-  const regionId = CAPTCHA_REGION === 'sgp' ? 'ap-southeast-1' : 'cn-shanghai'
-  captchaEndpoint =
-    CAPTCHA_REGION === 'sgp'
-      ? 'captcha.ap-southeast-1.aliyuncs.com'
-      : 'captcha.cn-shanghai.aliyuncs.com'
-  captchaClient = new CaptchaClient(
-    new Config({
-      accessKeyId: ALIYUN_ACCESS_KEY_ID,
-      accessKeySecret: ALIYUN_ACCESS_KEY_SECRET,
-      endpoint: captchaEndpoint,
-      regionId,
-    }),
-  )
-}
+const captchaConfigured = Boolean(CAPTCHA_SCENE_ID)
 // ===== END Aliyun ESA AI Captcha =====
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -107,7 +78,7 @@ if (!SMTP_USER || !SMTP_PASS) {
 
 // ===== BEGIN Aliyun ESA AI Captcha (optional) =====
 console.log(
-  `Contact captcha: configured=${captchaConfigured} sceneLen=${CAPTCHA_SCENE_ID.length} endpoint=${captchaEndpoint || 'n/a'}`,
+  `Contact captcha: configured=${captchaConfigured} sceneLen=${CAPTCHA_SCENE_ID.length}`,
 )
 // ===== END Aliyun ESA AI Captcha =====
 console.log(`SMTP: ${SMTP_HOST}:${SMTP_PORT} secure=${SMTP_SECURE} from=${FROM_DISPLAY_NAME} site=${SITE_NAME}`)
@@ -185,55 +156,24 @@ function describeCaptchaMeta(req) {
   }
 }
 
-async function verifyAliyunCaptcha(captchaVerifyParam) {
+/**
+ * ESA AI Captcha consumes the V3 token at the edge and echoes
+ * X-Captcha-Verify-Code: T001 on the origin response. Origin requires the
+ * param when a scene is configured, and treats a non-T001 echo as a failure.
+ */
+function verifyAliyunCaptcha(req) {
   if (!captchaConfigured) {
     return { ok: true, skipped: true }
   }
-  // ESA AI Captcha verifies and consumes the V3 token at the edge (response
-  // header X-Captcha-Verify-Code: T001). Calling VerifyIntelligentCaptcha
-  // again with the same CaptchaVerifyParam returns F018 (reuse). Origin only
-  // requires the param be present; ESA + CONTACT_PROXY_TOKEN are the gates.
+  const captchaVerifyParam = readCaptchaVerifyParam(req)
   if (!captchaVerifyParam) {
     return { ok: false, verifyCode: 'F002' }
   }
-  return { ok: true, verifyCode: 'ESA', skippedOpenApi: true }
-}
-
-function captchaErrorMeta(err) {
-  const message = err instanceof Error ? err.message : String(err)
-  const code = err?.code || err?.data?.Code || err?.name || ''
-  const statusCode = Number(err?.statusCode || err?.data?.statusCode || 0) || undefined
-  return { message, code, statusCode }
-}
-
-/** Map SDK throw → client status. Auth/network stay 503; param/verify failures → 403. */
-function captchaThrowHttpStatus(meta) {
-  const blob = `${meta.code} ${meta.message}`.toLowerCase()
-  if (
-    blob.includes('forbidden') ||
-    blob.includes('unauthorized') ||
-    blob.includes('invalidaccesskey') ||
-    blob.includes('signature') ||
-    blob.includes('throttl') ||
-    blob.includes('timeout') ||
-    blob.includes('econn') ||
-    blob.includes('enotfound') ||
-    blob.includes('network') ||
-    blob.includes('internalerror') ||
-    (meta.statusCode && meta.statusCode >= 500)
-  ) {
-    return 503
+  const verifyCode = (req.get('x-captcha-verify-code') || '').trim()
+  if (verifyCode && verifyCode !== 'T001') {
+    return { ok: false, verifyCode }
   }
-  if (
-    blob.includes('missingparameter') ||
-    blob.includes('invalidparameter') ||
-    blob.includes('captcha') ||
-    blob.includes('scene') ||
-    (meta.statusCode && meta.statusCode >= 400 && meta.statusCode < 500)
-  ) {
-    return 403
-  }
-  return 503
+  return { ok: true, verifyCode: verifyCode || 'ESA', skippedOpenApi: true }
 }
 // ===== END Aliyun ESA AI Captcha =====
 
@@ -448,30 +388,13 @@ app.post('/api/contact', contactLimiter, async (req, res) => {
     }
 
     // ===== BEGIN Aliyun ESA AI Captcha (optional) =====
-    const captchaVerifyParam = readCaptchaVerifyParam(req)
-    if (captchaConfigured) {
-      try {
-        const captcha = await verifyAliyunCaptcha(captchaVerifyParam)
-        if (!captcha.ok) {
-          console.warn(
-            `Captcha rejected: verifyCode=${captcha.verifyCode} paramLen=${captchaVerifyParam.length}`,
-          )
-          res.status(403).json({ ok: false, error: 'Verification did not pass. Please try again.' })
-          return
-        }
-      } catch (captchaError) {
-        const meta = captchaErrorMeta(captchaError)
-        const status = captchaThrowHttpStatus(meta)
-        console.error(
-          `Captcha verify failed: status=${status} code=${meta.code || 'n/a'} http=${meta.statusCode || 'n/a'} paramLen=${captchaVerifyParam.length} msg=${meta.message}`,
-        )
-        if (status === 403) {
-          res.status(403).json({ ok: false, error: 'Verification did not pass. Please try again.' })
-          return
-        }
-        res.status(503).json({ ok: false, error: 'Verification unavailable. Please try again later.' })
-        return
-      }
+    const captcha = verifyAliyunCaptcha(req)
+    if (!captcha.ok) {
+      console.warn(
+        `Captcha rejected: verifyCode=${captcha.verifyCode} paramLen=${readCaptchaVerifyParam(req).length}`,
+      )
+      res.status(403).json({ ok: false, error: 'Verification did not pass. Please try again.' })
+      return
     }
     // ===== END Aliyun ESA AI Captcha =====
 
