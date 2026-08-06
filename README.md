@@ -99,9 +99,6 @@ Copy `.env.example` → `.env`.
 | `SITE_NAME` | no | hostname of first `ALLOWED_ORIGIN` | Footer brand in mail templates |
 | `CONTACT_PROXY_TOKEN` | no | _(empty)_ | Shared secret with reverse proxy |
 | `CAPTCHA_SCENE_ID` | no | _(empty)_ | Aliyun ESA captcha scene id |
-| `CAPTCHA_REGION` | no | `cn` | `cn` or `sgp` |
-| `ALIYUN_ACCESS_KEY_ID` | no | _(empty)_ | RAM AccessKey for captcha gate |
-| `ALIYUN_ACCESS_KEY_SECRET` | no | _(empty)_ | RAM AccessKey secret |
 
 For **QQ Mail**: enable SMTP in the mailbox settings and create an **authorization code** (not your login password).
 
@@ -113,38 +110,23 @@ This project is designed to sit behind **Alibaba Cloud ESA AI Captcha** (一点�
 
 ### Defense in depth
 
-1. **ESA edge** verifies the challenge before traffic reaches origin
-2. **This origin** only checks that a captcha verify param is present when captcha env vars are set (the edge already consumed the V3 token; calling OpenAPI again would return F018 reuse)
+1. **ESA edge** verifies the challenge before traffic reaches origin — no server-side SDK is required ([ESA docs](https://help.aliyun.com/zh/edge-security-acceleration/esa/user-guide/ai-captchas-overview/))
+2. **This origin** checks that a captcha verify param is present when `CAPTCHA_SCENE_ID` is set, and treats a non-`T001` `X-Captcha-Verify-Code` echo as a failure (defense in depth)
 3. **Nginx** (or any reverse proxy) can send `X-Contact-Proxy-Token` matching `CONTACT_PROXY_TOKEN` so clients cannot hit the Node port directly
 
 ### Soft-disable (recommended for local / non-ESA setups)
 
-Leave these blank in `.env`:
+Leave `CAPTCHA_SCENE_ID` blank in `.env`:
 
 ```bash
-ALIYUN_ACCESS_KEY_ID=
-ALIYUN_ACCESS_KEY_SECRET=
 CAPTCHA_SCENE_ID=
 ```
 
 `captchaConfigured` becomes `false` and every captcha branch is a no-op.
 
-### Hard-remove
+### Rate limiting and real client IP
 
-1. Delete every block in `index.js` between:
-   ```
-   // ===== BEGIN Aliyun ESA AI Captcha (optional) =====
-   ...
-   // ===== END Aliyun ESA AI Captcha =====
-   ```
-   (`captchaRows` defaults to `''`, so owner HTML remains valid after deletion.)
-2. Uninstall the SDKs:
-   ```bash
-   npm uninstall @alicloud/captcha20230305 @alicloud/openapi-core
-   ```
-3. Remove the captcha section from `.env.example` if you fork the repo
-
-`CONTACT_PROXY_TOKEN` is **not** part of the ESA module — it is a generic reverse-proxy shared secret and stays useful without Aliyun.
+If Aliyun ESA is in front of your reverse proxy, enable ESA's **managed transform** ("Add real client IP header") so origin receives `ali-real-client-ip`. The rate limiter uses that header when present — otherwise every visitor would share the ESA edge IP's bucket. Check what the limiter sees via `GET /api/ip`.
 
 ### Frontend note
 

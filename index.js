@@ -1,20 +1,16 @@
 const express = require('express')
 const cors = require('cors')
+const crypto = require('crypto')
 const rateLimit = require('express-rate-limit')
+const helmet = require('helmet')
 const nodemailer = require('nodemailer')
 require('dotenv').config({ path: require('path').join(__dirname, '.env') })
 
 // ===== BEGIN Aliyun ESA AI Captcha (optional) =====
 // Only needed if you front this service with Alibaba Cloud ESA AI Captcha.
-// Soft-disable: leave CAPTCHA_SCENE_ID / ALIYUN_ACCESS_KEY_ID blank in .env
-//   -> captchaConfigured=false, all of this becomes a no-op automatically.
-// Hard-remove: delete every block marked BEGIN/END Aliyun ESA AI Captcha
-//   (captchaRows defaults to '' so owner HTML stays valid), then run:
-//   npm uninstall @alicloud/captcha20230305 @alicloud/openapi-core
-const Captcha20230305 = require('@alicloud/captcha20230305')
-const OpenApi = require('@alicloud/openapi-core')
-const CaptchaClient = Captcha20230305.default
-const { Config } = OpenApi.$OpenApiUtil
+// ESA verifies and consumes the V3 token at the edge — no server-side SDK is
+// required (https://help.aliyun.com/zh/edge-security-acceleration/esa/user-guide/ai-captchas-overview/).
+// Soft-disable: leave CAPTCHA_SCENE_ID blank in .env -> captchaConfigured=false.
 // ===== END Aliyun ESA AI Captcha =====
 
 const PORT = Number(process.env.PORT) || 8787
@@ -67,31 +63,8 @@ const SITE_NAME = sanitizeHeaderValue(deriveSiteName(), 'your-site')
 
 // ===== BEGIN Aliyun ESA AI Captcha (optional) =====
 const CAPTCHA_SCENE_ID = envValue('CAPTCHA_SCENE_ID')
-const CAPTCHA_REGION = (envValue('CAPTCHA_REGION') || 'cn').toLowerCase()
-const ALIYUN_ACCESS_KEY_ID = envValue('ALIYUN_ACCESS_KEY_ID')
-const ALIYUN_ACCESS_KEY_SECRET = envValue('ALIYUN_ACCESS_KEY_SECRET')
 
-const captchaConfigured = Boolean(
-  CAPTCHA_SCENE_ID && ALIYUN_ACCESS_KEY_ID && ALIYUN_ACCESS_KEY_SECRET,
-)
-
-let captchaClient = null
-let captchaEndpoint = ''
-if (captchaConfigured) {
-  const regionId = CAPTCHA_REGION === 'sgp' ? 'ap-southeast-1' : 'cn-shanghai'
-  captchaEndpoint =
-    CAPTCHA_REGION === 'sgp'
-      ? 'captcha.ap-southeast-1.aliyuncs.com'
-      : 'captcha.cn-shanghai.aliyuncs.com'
-  captchaClient = new CaptchaClient(
-    new Config({
-      accessKeyId: ALIYUN_ACCESS_KEY_ID,
-      accessKeySecret: ALIYUN_ACCESS_KEY_SECRET,
-      endpoint: captchaEndpoint,
-      regionId,
-    }),
-  )
-}
+const captchaConfigured = Boolean(CAPTCHA_SCENE_ID)
 // ===== END Aliyun ESA AI Captcha =====
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -107,7 +80,7 @@ if (!SMTP_USER || !SMTP_PASS) {
 
 // ===== BEGIN Aliyun ESA AI Captcha (optional) =====
 console.log(
-  `Contact captcha: configured=${captchaConfigured} sceneLen=${CAPTCHA_SCENE_ID.length} endpoint=${captchaEndpoint || 'n/a'}`,
+  `Contact captcha: configured=${captchaConfigured} sceneLen=${CAPTCHA_SCENE_ID.length}`,
 )
 // ===== END Aliyun ESA AI Captcha =====
 console.log(`SMTP: ${SMTP_HOST}:${SMTP_PORT} secure=${SMTP_SECURE} from=${FROM_DISPLAY_NAME} site=${SITE_NAME}`)
@@ -120,6 +93,18 @@ const transporter = nodemailer.createTransport({
     user: SMTP_USER,
     pass: SMTP_PASS,
   },
+  // Fail fast instead of holding a request for the 10-minute socket timeout.
+  connectionTimeout: 15000,
+  greetingTimeout: 15000,
+  socketTimeout: 30000,
+})
+
+// Surface SMTP misconfiguration at boot, not on the first visitor.
+transporter.verify().catch((error) => {
+  console.error(
+    'SMTP verification failed — mail will not send:',
+    error instanceof Error ? error.message : error,
+  )
 })
 
 function escapeHtml(value) {
@@ -185,55 +170,24 @@ function describeCaptchaMeta(req) {
   }
 }
 
-async function verifyAliyunCaptcha(captchaVerifyParam) {
+/**
+ * ESA AI Captcha consumes the V3 token at the edge and echoes
+ * X-Captcha-Verify-Code: T001 on the origin response. Origin requires the
+ * param when a scene is configured, and treats a non-T001 echo as a failure.
+ */
+function verifyAliyunCaptcha(req) {
   if (!captchaConfigured) {
     return { ok: true, skipped: true }
   }
-  // ESA AI Captcha verifies and consumes the V3 token at the edge (response
-  // header X-Captcha-Verify-Code: T001). Calling VerifyIntelligentCaptcha
-  // again with the same CaptchaVerifyParam returns F018 (reuse). Origin only
-  // requires the param be present; ESA + CONTACT_PROXY_TOKEN are the gates.
+  const captchaVerifyParam = readCaptchaVerifyParam(req)
   if (!captchaVerifyParam) {
     return { ok: false, verifyCode: 'F002' }
   }
-  return { ok: true, verifyCode: 'ESA', skippedOpenApi: true }
-}
-
-function captchaErrorMeta(err) {
-  const message = err instanceof Error ? err.message : String(err)
-  const code = err?.code || err?.data?.Code || err?.name || ''
-  const statusCode = Number(err?.statusCode || err?.data?.statusCode || 0) || undefined
-  return { message, code, statusCode }
-}
-
-/** Map SDK throw → client status. Auth/network stay 503; param/verify failures → 403. */
-function captchaThrowHttpStatus(meta) {
-  const blob = `${meta.code} ${meta.message}`.toLowerCase()
-  if (
-    blob.includes('forbidden') ||
-    blob.includes('unauthorized') ||
-    blob.includes('invalidaccesskey') ||
-    blob.includes('signature') ||
-    blob.includes('throttl') ||
-    blob.includes('timeout') ||
-    blob.includes('econn') ||
-    blob.includes('enotfound') ||
-    blob.includes('network') ||
-    blob.includes('internalerror') ||
-    (meta.statusCode && meta.statusCode >= 500)
-  ) {
-    return 503
+  const verifyCode = (req.get('x-captcha-verify-code') || '').trim()
+  if (verifyCode && verifyCode !== 'T001') {
+    return { ok: false, verifyCode }
   }
-  if (
-    blob.includes('missingparameter') ||
-    blob.includes('invalidparameter') ||
-    blob.includes('captcha') ||
-    blob.includes('scene') ||
-    (meta.statusCode && meta.statusCode >= 400 && meta.statusCode < 500)
-  ) {
-    return 403
-  }
-  return 503
+  return { ok: true, verifyCode: verifyCode || 'ESA', skippedOpenApi: true }
 }
 // ===== END Aliyun ESA AI Captcha =====
 
@@ -408,6 +362,8 @@ function buildOwnerNotifyHtml(safeEmail, safeMessage, meta) {
 
 const app = express()
 
+app.disable('x-powered-by')
+app.use(helmet())
 app.set('trust proxy', 1)
 app.use(express.json({ limit: '256kb' }))
 app.use(
@@ -422,16 +378,53 @@ app.use(
   }),
 )
 
+// Minimal request log with a request id for correlating errors in PM2 logs.
+app.use((req, res, next) => {
+  const requestId = crypto.randomBytes(4).toString('hex')
+  res.setHeader('X-Request-Id', requestId)
+  const start = process.hrtime.bigint()
+  res.on('finish', () => {
+    const ms = Number(process.hrtime.bigint() - start) / 1e6
+    console.log(
+      `${new Date().toISOString()} ${req.method} ${req.originalUrl} ${res.statusCode} ${ms.toFixed(1)}ms id=${requestId} ip=${req.ip || '-'}`,
+    )
+  })
+  next()
+})
+
+/**
+ * Client IP for rate limiting. Reverse proxies (nginx) replace X-Forwarded-For
+ * with their own peer, so with Aliyun ESA in front every visitor would share
+ * one bucket. ESA's managed transform injects `ali-real-client-ip` (more
+ * trustworthy than XFF); fall back to req.ip when that header is absent.
+ */
+function clientIp(req) {
+  const esaIp = (req.get('ali-real-client-ip') || '').trim()
+  if (esaIp && esaIp.length <= 64) return esaIp
+  return req.ip || req.socket?.remoteAddress || 'unknown'
+}
+
 const contactLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 5,
+  max: 10,
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: clientIp,
   message: { ok: false, error: 'Too many messages. Please try again later.' },
 })
 
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true })
+})
+
+// Calibration aid: shows which IP the rate limiter sees (ESA header vs req.ip).
+app.get('/api/ip', (req, res) => {
+  res.json({
+    ok: true,
+    clientIp: clientIp(req),
+    reqIp: req.ip,
+    esaIp: (req.get('ali-real-client-ip') || '').trim() || null,
+  })
 })
 
 // POST /api/contact — production typically sits behind a reverse proxy.
@@ -448,30 +441,13 @@ app.post('/api/contact', contactLimiter, async (req, res) => {
     }
 
     // ===== BEGIN Aliyun ESA AI Captcha (optional) =====
-    const captchaVerifyParam = readCaptchaVerifyParam(req)
-    if (captchaConfigured) {
-      try {
-        const captcha = await verifyAliyunCaptcha(captchaVerifyParam)
-        if (!captcha.ok) {
-          console.warn(
-            `Captcha rejected: verifyCode=${captcha.verifyCode} paramLen=${captchaVerifyParam.length}`,
-          )
-          res.status(403).json({ ok: false, error: 'Verification did not pass. Please try again.' })
-          return
-        }
-      } catch (captchaError) {
-        const meta = captchaErrorMeta(captchaError)
-        const status = captchaThrowHttpStatus(meta)
-        console.error(
-          `Captcha verify failed: status=${status} code=${meta.code || 'n/a'} http=${meta.statusCode || 'n/a'} paramLen=${captchaVerifyParam.length} msg=${meta.message}`,
-        )
-        if (status === 403) {
-          res.status(403).json({ ok: false, error: 'Verification did not pass. Please try again.' })
-          return
-        }
-        res.status(503).json({ ok: false, error: 'Verification unavailable. Please try again later.' })
-        return
-      }
+    const captcha = verifyAliyunCaptcha(req)
+    if (!captcha.ok) {
+      console.warn(
+        `Captcha rejected: verifyCode=${captcha.verifyCode} paramLen=${readCaptchaVerifyParam(req).length}`,
+      )
+      res.status(403).json({ ok: false, error: 'Verification did not pass. Please try again.' })
+      return
     }
     // ===== END Aliyun ESA AI Captcha =====
 
@@ -541,9 +517,38 @@ app.use((err, _req, res, next) => {
     res.status(403).json({ ok: false, error: 'Forbidden.' })
     return
   }
-  next(err)
+  // Everything else answers JSON too — never the Express HTML error page.
+  const status = err?.type === 'entity.parse.failed' ? 400 : 500
+  console.error(`Unhandled error (${status}):`, err instanceof Error ? err.stack : err)
+  res.status(status).json({
+    ok: false,
+    error:
+      status === 400
+        ? 'Invalid JSON body.'
+        : 'Something went wrong. Please try again later.',
+  })
 })
 
-app.listen(PORT, '127.0.0.1', () => {
+const server = app.listen(PORT, '127.0.0.1', () => {
   console.log(`Contact server listening on http://127.0.0.1:${PORT}`)
 })
+
+// Graceful shutdown: drain in-flight requests, close the SMTP pool, then exit.
+let shuttingDown = false
+function shutdown(signal) {
+  if (shuttingDown) return
+  shuttingDown = true
+  console.log(`${signal} received — draining connections…`)
+  const force = setTimeout(() => {
+    console.error('Shutdown timed out; forcing exit.')
+    process.exit(1)
+  }, 5000)
+  force.unref()
+  server.close(() => {
+    transporter.close()
+    process.exit(0)
+  })
+  server.closeIdleConnections?.()
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'))
+process.on('SIGINT', () => shutdown('SIGINT'))
